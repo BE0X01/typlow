@@ -8,7 +8,7 @@ Typlow는 앱마다 원하는 한글·영어 입력 상태를 설정하고, 브�
 
 ## 미리보기
 
-![Typlow Version 0.4 설정 화면](docs/images/preview.png)
+![Typlow Version 0.5 설정 화면](docs/images/preview.png)
 
 ## 주요 기능
 
@@ -21,7 +21,7 @@ Typlow는 앱마다 원하는 한글·영어 입력 상태를 설정하고, 브�
 
 ## 사용 방법
 
-1. [릴리즈 페이지](https://github.com/BE0X01/typlow/releases/latest)에서 `Typlow-0.4-win-x64.zip`을 내려받습니다.
+1. [릴리즈 페이지](https://github.com/BE0X01/typlow/releases/latest)에서 `Typlow-0.5-win-x64.zip`을 내려받습니다.
 2. 쓰기 권한이 있는 폴더에 압축을 풀고 `Typlow.exe`를 실행합니다.
 3. **앱 추가**를 누르고 실행 중인 앱을 선택합니다. 목록에 없다면 **프로세스 검색** 또는 **파일 찾기**로 등록합니다.
 4. 앱 오른쪽에서 원하는 입력 언어인 **한글** 또는 **영어**를 선택합니다.

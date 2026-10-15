@@ -20,6 +20,38 @@ internal static class SelfTests
         var settings = new Settings { Rules = new() { new("editor.exe", "Editor", InputMode.English), new("other.exe", "Other", InputMode.Korean) } };
         Observation Obs(nint window, string path, bool address = false, InputState? state = null) => new(window, path, address, state ?? ko);
 
+        Check("Focus events coalesce and obey a minimum interval", () =>
+        {
+            var gate = new FocusRefreshGate();
+            Assert(gate.TryTake(0, false)); gate.Complete(20);
+            Assert(gate.Request());
+            for (int i = 0; i < 10000; i++) Assert(!gate.Request());
+            Assert(!gate.TryTake(169, false));
+            Assert(gate.TryTake(170, false)); gate.Complete(190);
+            Assert(!gate.TryTake(340, false));
+            Assert(!gate.TryTake(1189, false));
+            Assert(gate.TryTake(1190, false));
+        });
+        Check("Focus fallback is measured after slow provider completes", () =>
+        {
+            var gate = new FocusRefreshGate();
+            Assert(gate.TryTake(0, false)); gate.Complete(5000);
+            Assert(!gate.TryTake(5001, false));
+            Assert(!gate.TryTake(5999, false));
+            Assert(gate.TryTake(6000, false));
+        });
+        Check("Events during inspection are retained without immediate reentry", () =>
+        {
+            var gate = new FocusRefreshGate();
+            Assert(gate.TryTake(0, false));
+            Assert(gate.Request()); gate.Complete(100);
+            Assert(!gate.TryTake(249, false));
+            Assert(gate.TryTake(250, false)); gate.Complete(260);
+            Assert(gate.TryTake(261, true), "New foreground window must be observed promptly");
+            gate.Complete(270); gate.Reset();
+            Assert(gate.TryTake(271, false), "Settings change must invalidate focus classification");
+        });
+
         Check("App rule applies exactly once on window entry", () =>
         {
             var policy = new FocusPolicy(); Assert(policy.Observe(Obs(1, "editor.exe"), settings)?.Mode == InputMode.English);

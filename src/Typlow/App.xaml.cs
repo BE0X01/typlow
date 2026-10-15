@@ -169,8 +169,9 @@ public partial class App : Application
         {
             timer.Stop(); passive.Dispose(); cue.Close();
             observations.Enqueue("Status observations: " + statusCount);
-            observations.Enqueue("No input switching performed; engine disabled during passive smoke test.");
-            File.WriteAllLines(path, observations); Shutdown(statusCount > 0 ? 0 : 1);
+            observations.Enqueue("Paused observer emits no status: " + (statusCount == 0));
+            observations.Enqueue("Engine paused: accessibility and IME sampling are disabled.");
+            File.WriteAllLines(path, observations); Shutdown(statusCount == 0 ? 0 : 1);
         };
         timer.Start();
     }

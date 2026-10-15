@@ -58,7 +58,7 @@
     </Border>
    </Grid>
    <Grid Grid.Row="3" Margin="30,17,30,20"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <TextBlock Text="Version 0.4" FontSize="12" Foreground="#9399AB" VerticalAlignment="Center"/>
+    <TextBlock Text="Version 0.5" FontSize="12" Foreground="#9399AB" VerticalAlignment="Center"/>
     <TextBlock Grid.Column="1" Text="Windows를 위한 입력 도우미" FontSize="12" Foreground="#858E9F"/>
    </Grid>
   </Grid>

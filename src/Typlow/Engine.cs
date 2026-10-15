@@ -56,18 +56,18 @@ internal sealed class FocusEngine : IDisposable
     private readonly HangulKeyObserver hangulKey;
     private readonly Dictionary<nint, string> paths = new();
     private readonly Native.WinEventProc foregroundCallback;
-    private readonly AutomationFocusChangedEventHandler focusCallback;
     private nint hook, inputFocusHook;
     private volatile bool stopping;
     private volatile Settings settings;
     private long epoch;
-    private int focusQueued;
+    private readonly FocusRefreshGate focusRefresh = new();
+    private int caretAttempts;
+    private long nextCaretCheck;
     private nint window;
     private InputMode lastMode;
     private string focusKey = "";
-    private bool address, isInput;
+    private bool address, isInput, focusValid;
     private AutomationElement? focusedElement;
-    private DateTime nextFocusCheck;
     private EngineStatus? lastStatus;
     public event Action<string>? Log;
     public event Action<IndicatorNotice>? Indicator;
@@ -79,10 +79,16 @@ internal sealed class FocusEngine : IDisposable
         this.settings = settings.Copy();
         hangulKey = new(target => Enqueue(() => {
             if (target == window && target == Native.GetForegroundWindow() && this.settings.Enabled && this.settings.ShowIndicator)
+            {
+                caretAttempts = 0;
                 manualIndicator.Arm(target, lastMode, DateTime.UtcNow);
+            }
         }));
-        foregroundCallback = (_, _, _, _, _, _, _) => QueueFocus();
-        focusCallback = (_, _) => QueueFocus();
+        foregroundCallback = (_, ev, target, _, _, _, _) =>
+        {
+            nint foreground = Native.GetForegroundWindow();
+            if (ev == 3 || target != 0 && Native.GetAncestor(target, 2) == foreground) QueueFocus();
+        };
         worker = new Thread(Run) { IsBackground = true, Name = "Typlow focus observer" };
         worker.SetApartmentState(ApartmentState.MTA);
     }
@@ -97,9 +103,8 @@ internal sealed class FocusEngine : IDisposable
     }
     private void QueueFocus()
     {
-        // Duplicate accessibility focus notifications aren't a new focus entry and must not cancel a switch.
-        if (Interlocked.Exchange(ref focusQueued, 1) != 0) return;
-        Enqueue(() => { Interlocked.Exchange(ref focusQueued, 0); Observe(true); });
+        // Coalesce notifications without queuing an expensive observation for each event.
+        if (!stopping && focusRefresh.Request()) wake.Set();
     }
     private void Enqueue(Action action) { if (!stopping) { queue.Enqueue(action); wake.Set(); } }
     public void Update(Settings value)
@@ -119,29 +124,23 @@ internal sealed class FocusEngine : IDisposable
             }
             settings = copy;
             manualIndicator.Clear();
+            focusKey = ""; focusedElement = null;
+            focusValid = false;
+            focusRefresh.Reset();
             if (!wasEnabled && copy.Enabled) policy.Reset();
-            Try(() => Observe(true));
+            Try(Observe);
         });
     }
     private void Run()
     {
-        try { Automation.AddAutomationFocusChangedEventHandler(focusCallback); }
-        catch (Exception e) { Log?.Invoke("입력란 이벤트 연결 실패: " + e.GetType().Name); }
-        try
+        // WinEvent focus notifications plus a slow fallback avoid a desktop-wide UIA subscription.
+        Try(Observe);
+        while (!stopping)
         {
-            Try(() => Observe(true));
-            while (!stopping)
-            {
-                while (queue.TryDequeue(out var action)) Try(action);
-                if (stopping) break;
-                // Read-only IME sampling also shows manual Hangul/English changes. Writes require a policy transition.
-                Try(() => Observe(DateTime.UtcNow >= nextFocusCheck));
-                wake.WaitOne(250);
-            }
-        }
-        finally
-        {
-            try { Automation.RemoveAutomationFocusChangedEventHandler(focusCallback); } catch { }
+            while (queue.TryDequeue(out var action)) Try(action);
+            if (stopping) break;
+            Try(Observe);
+            wake.WaitOne(250);
         }
     }
     private void Try(Action action)
@@ -149,8 +148,10 @@ internal sealed class FocusEngine : IDisposable
         try { action(); }
         catch (Exception e) when (e is not OutOfMemoryException) { Log?.Invoke("관찰 중 오류: " + e.GetType().Name); }
     }
-    private void Observe(bool refreshFocus)
+    private void Observe()
     {
+        // Pausing must stop accessibility and IME reads as well as input switching.
+        if (!settings.Enabled) return;
         nint current = Native.GetForegroundWindow();
         if (current == 0) return;
         bool changedWindow = current != window;
@@ -158,16 +159,21 @@ internal sealed class FocusEngine : IDisposable
         {
             Interlocked.Increment(ref epoch);
             HideIndicator?.Invoke();
-            window = current; lastMode = InputMode.Unknown; focusKey = ""; focusedElement = null; address = false; isInput = false;
+            window = current; lastMode = InputMode.Unknown; focusKey = ""; focusedElement = null; address = false; isInput = false; focusValid = false;
             manualIndicator.Clear();
             foreach (nint old in paths.Keys.Where(w => !Native.IsWindow(w)).ToArray()) { paths.Remove(old); policy.Forget(old); }
         }
         if (!paths.TryGetValue(window, out string? path) || path.Length == 0 || changedWindow) paths[window] = path = Native.AppPath(window);
         indicatorVisit.Enter(current, path);
+        bool inspectAddress = settings.AddressEnglish && BrowserDetection.IsBrowser(path);
+        bool inspectInput = settings.ShowIndicator && settings.Rules.Exists(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
         bool changedInput = false;
-        if (refreshFocus || changedWindow)
+        if (!inspectAddress && !inspectInput)
         {
-            nextFocusCheck = DateTime.UtcNow.AddMilliseconds(BrowserDetection.IsBrowser(path) ? 250 : 1000);
+            focusedElement = null; focusKey = ""; address = false; isInput = false; focusValid = true;
+        }
+        else if (focusRefresh.TryTake(Environment.TickCount64, changedWindow))
+        {
             try
             {
                 var element = AutomationElement.FocusedElement;
@@ -178,23 +184,27 @@ internal sealed class FocusEngine : IDisposable
                     var data = element.Current;
                     string key = string.Join(".", element.GetRuntimeId());
                     changedInput = focusKey != key;
-                    if (changedInput) { Interlocked.Increment(ref epoch); HideIndicator?.Invoke(); }
+                    if (changedInput) { Interlocked.Increment(ref epoch); HideIndicator?.Invoke(); caretAttempts = 0; nextCaretCheck = 0; }
                     focusKey = key; focusedElement = element;
-                    address = BrowserDetection.IsBrowser(path) && BrowserDetection.IsAddress(element);
-                    isInput = data.ControlType == ControlType.Edit ||
-                        (data.ControlType == ControlType.ComboBox && element.TryGetCurrentPattern(ValuePattern.Pattern, out _));
-                    if (data.ControlType == ControlType.Document && element.TryGetCurrentPattern(TextPattern.Pattern, out object text))
-                        isInput = ((TextPattern)text).DocumentRange.GetAttributeValue(TextPattern.IsReadOnlyAttribute) is false;
+                    if (changedInput)
+                    {
+                        address = inspectAddress && BrowserDetection.IsAddress(element);
+                        isInput = inspectInput && IsEditable(element, data.ControlType);
+                    }
+                    focusValid = true;
                 }
-                else if (changedWindow)
+                else
                 {
                     // UIA focus can lag the foreground event. Defer decisions rather than misclassifying an address bar.
-                    nextFocusCheck = DateTime.UtcNow; return;
+                    focusedElement = null; focusKey = ""; isInput = false; focusValid = false;
+                    focusRefresh.Request(); return;
                 }
             }
-            catch (ElementNotAvailableException) { nextFocusCheck = DateTime.UtcNow; return; }
-            catch (System.Runtime.InteropServices.COMException) { focusedElement = null; }
+            catch (ElementNotAvailableException) { focusedElement = null; focusKey = ""; isInput = false; focusValid = false; focusRefresh.Request(); return; }
+            catch (System.Runtime.InteropServices.COMException) { focusedElement = null; focusKey = ""; isInput = false; focusValid = false; focusRefresh.Request(); return; }
+            finally { focusRefresh.Complete(Environment.TickCount64); }
         }
+        if (!focusValid) return;
         InputState state = ime.Read(window);
         var request = policy.Observe(new(window, path, address, state), settings);
         if (request != null)
@@ -218,14 +228,31 @@ internal sealed class FocusEngine : IDisposable
         if (status != lastStatus) { lastStatus = status; Status?.Invoke(status); }
         Rect anchor = Rect.Empty;
         bool manual = manualIndicator.Ready(window, state.Mode, DateTime.UtcNow);
-        if ((indicatorVisit.Pending || manual) && FocusPolicy.ShouldShowIndicator(settings, path, isInput, true, state.Mode))
+        if ((indicatorVisit.Pending || manual) && caretAttempts < 3 && Environment.TickCount64 >= nextCaretCheck &&
+            FocusPolicy.ShouldShowIndicator(settings, path, isInput, true, state.Mode))
+        {
+            caretAttempts++;
             anchor = CaretLocator.Find(window, focusedElement);
+            nextCaretCheck = Environment.TickCount64 + 500;
+        }
         bool visit = indicatorVisit.TryTake(settings, path, isInput, state.Mode, !anchor.IsEmpty);
         if (visit || (manual && !anchor.IsEmpty))
         {
             manualIndicator.Clear();
             Indicator?.Invoke(new(state.Mode, window, path, anchor, settings.IndicatorMilliseconds));
         }
+    }
+    private static bool IsEditable(AutomationElement element, ControlType type)
+    {
+        if (type == ControlType.Edit) return true;
+        if (type == ControlType.ComboBox) return element.TryGetCurrentPattern(ValuePattern.Pattern, out _);
+        if (type != ControlType.Document || !element.TryGetCurrentPattern(TextPattern.Pattern, out object text)) return false;
+        // Web editors may expose Document. Collapse a copy to one endpoint, never inspect DocumentRange.
+        var selection = ((TextPattern)text).GetSelection();
+        if (selection.Length != 1) return false;
+        var caret = selection[0].Clone();
+        caret.MoveEndpointByRange(TextPatternRangeEndpoint.End, caret, TextPatternRangeEndpoint.Start);
+        return caret.GetAttributeValue(TextPattern.IsReadOnlyAttribute) is false;
     }
     private static bool HasFocus(AutomationElement? element)
     {
@@ -272,4 +299,20 @@ internal sealed class FocusEngine : IDisposable
         worker.Join(800);
         // A provider may still be blocked in UIA; don't dispose its synchronization object underneath it.
     }
+}
+
+// All timing state belongs to the observer thread; only Request is called by event callbacks.
+internal sealed class FocusRefreshGate
+{
+    private int pending = 1;
+    private long nextAllowed, nextFallback;
+    internal bool Request() => Interlocked.Exchange(ref pending, 1) == 0;
+    internal void Reset() { nextAllowed = nextFallback = 0; Request(); }
+    internal bool TryTake(long now, bool changedWindow)
+    {
+        if (!changedWindow && (now < nextAllowed || Volatile.Read(ref pending) == 0 && now < nextFallback)) return false;
+        Interlocked.Exchange(ref pending, 0);
+        return true;
+    }
+    internal void Complete(long now) { nextAllowed = now + 150; nextFallback = now + 1000; }
 }
