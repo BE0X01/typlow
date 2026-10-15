@@ -242,44 +242,72 @@ internal static class SelfTests
             }
             finally { host.Close(); }
         });
-        Check("Indicator is consumed once per foreground visit, even after other input clicks", () =>
+        Check("Address and page input alternate with one popup on every entry", () =>
         {
-            var visit = new IndicatorVisit(); visit.Enter(1);
-            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.English, true));
-            for (int i = 0; i < 1000; i++) { visit.Enter(1); Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true)); }
+            var visit = new IndicatorVisit();
+            for (int i = 0; i < 20; i++)
+            {
+                foreach (string focus in new[] { "omnibox", "page-input" })
+                {
+                    visit.Enter(1, "editor.exe", focus, true);
+                    Assert(visit.TryTake(settings, "editor.exe", true, InputMode.English, true));
+                    for (int poll = 0; poll < 100; poll++)
+                    {
+                        visit.Enter(1, "EDITOR.EXE", focus, true);
+                        Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
+                    }
+                }
+            }
         });
-        Check("Returning from a different window grants exactly one new indicator", () =>
+        Check("Returning to the same input after a button or background re-arms popup", () =>
         {
-            var visit = new IndicatorVisit(); visit.Enter(1); visit.TryTake(settings, "editor.exe", true, InputMode.English, true);
-            visit.Enter(2); visit.TryTake(settings, "unconfigured.exe", false, InputMode.English, false);
-            visit.Enter(1); Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
-            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.English, true));
-        });
-        Check("Different windows of the same configured program don't replenish the popup", () =>
-        {
-            var visit = new IndicatorVisit(); visit.Enter(1, "editor.exe"); Assert(visit.TryTake(settings, "editor.exe", true, InputMode.English, true));
-            visit.Enter(2, "EDITOR.EXE"); Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
-            visit.Enter(3, "other.exe"); visit.Enter(1, "editor.exe"); Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
-        });
-        Check("App entry without an input waits for its first usable caret", () =>
-        {
-            var visit = new IndicatorVisit(); visit.Enter(1);
-            Assert(!visit.TryTake(settings, "editor.exe", false, InputMode.English, false));
-            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.English, false));
-            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.English, true));
-        });
-        Check("Unknown input mode doesn't consume a visit until mode is known", () =>
-        {
-            var visit = new IndicatorVisit(); visit.Enter(1);
-            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Unknown, true));
+            var visit = new IndicatorVisit(); visit.Enter(1, "editor.exe", "input", true);
+            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
+            visit.Enter(1, "editor.exe", "button", false);
+            Assert(!visit.Pending);
+            visit.Enter(1, "editor.exe", "input", true);
+            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
+            visit.Enter(2, "other.exe", "", false);
+            visit.Enter(1, "editor.exe", "input", true);
             Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
         });
-        Check("Unconfigured apps and paused visits never get a delayed popup on enable", () =>
+        Check("Same-program windows with matching runtime IDs are separate input entries", () =>
         {
-            var visit = new IndicatorVisit(); visit.Enter(1); Assert(!visit.TryTake(settings, "unconfigured.exe", true, InputMode.English, true));
-            var local = settings.Copy(); local.Enabled = false; visit.Enter(2); Assert(!visit.TryTake(local, "editor.exe", true, InputMode.English, true));
+            var visit = new IndicatorVisit(); visit.Enter(1, "editor.exe", "input", true);
+            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.English, true));
+            visit.Enter(2, "EDITOR.EXE", "input", true);
+            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
+        });
+        Check("Input entry waits for caret and known mode without duplicate polling popups", () =>
+        {
+            var visit = new IndicatorVisit(); visit.Enter(1, "editor.exe", "input", true);
+            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Unknown, true));
+            visit.Enter(1, "editor.exe", "input", true);
+            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.English, false));
+            Assert(visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
+            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Korean, true));
+        });
+        Check("Leaving an input cancels a delayed caret popup; empty focus cannot arm", () =>
+        {
+            var visit = new IndicatorVisit(); visit.Enter(1, "editor.exe", "input", true);
+            Assert(!visit.TryTake(settings, "editor.exe", true, InputMode.Korean, false));
+            visit.Enter(1, "editor.exe", "button", false);
+            Assert(!visit.TryTake(settings, "editor.exe", false, InputMode.Korean, true));
+            visit.Enter(1, "editor.exe", "", true); Assert(!visit.Pending);
+            visit.Enter(0, "editor.exe", "input", true); Assert(!visit.Pending);
+        });
+        Check("Unconfigured apps, pause and disabled indicator suppress focus popups", () =>
+        {
+            var visit = new IndicatorVisit(); visit.Enter(1, "unconfigured.exe", "input", true);
+            Assert(!visit.TryTake(settings, "unconfigured.exe", true, InputMode.English, true));
+            var local = settings.Copy(); local.Enabled = false;
+            visit.Enter(2, "editor.exe", "input", true);
+            Assert(!visit.TryTake(local, "editor.exe", true, InputMode.English, true));
             local.Enabled = true; Assert(!visit.TryTake(local, "editor.exe", true, InputMode.English, true));
-            visit.Enter(3); Assert(visit.TryTake(local, "editor.exe", true, InputMode.English, true));
+            local.ShowIndicator = false; visit.Enter(2, "editor.exe", "other-input", true);
+            Assert(!visit.TryTake(local, "editor.exe", true, InputMode.English, true));
+            local.ShowIndicator = true; visit.Enter(2, "editor.exe", "input", true);
+            Assert(visit.TryTake(local, "editor.exe", true, InputMode.Korean, true));
         });
         Check("Process search matches hidden Store processes by app name, executable and PID", () =>
         {

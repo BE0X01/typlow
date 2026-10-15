@@ -117,16 +117,20 @@ public sealed class SettingsStore
 public record Observation(nint Window, string Path, bool Address, InputState State);
 public record SwitchRequest(InputMode Mode, InputState? Restore, string Reason);
 
-// One display opportunity per foreground-program visit; input and same-program window changes never replenish it.
+// One display opportunity per focused input. Polling the same input never replenishes it.
 public sealed class IndicatorVisit
 {
-    private string active = "";
+    private nint activeWindow;
+    private string activePath = "", activeFocus = "";
     private bool pending;
     public bool Pending => pending;
-    public void Enter(nint window, string? path = null)
+    public void Enter(nint window, string path, string focus, bool isInput)
     {
-        string identity = window == 0 ? "" : string.IsNullOrWhiteSpace(path) ? "window:" + window : path;
-        if (!string.Equals(active, identity, StringComparison.OrdinalIgnoreCase)) { active = identity; pending = window != 0; }
+        bool changed = activeWindow != window || activeFocus != focus ||
+            !string.Equals(activePath, path, StringComparison.OrdinalIgnoreCase);
+        activeWindow = window; activePath = path; activeFocus = focus;
+        if (window == 0 || !isInput || focus.Length == 0) pending = false;
+        else if (changed) pending = true;
     }
     public bool TryTake(Settings settings, string path, bool isInput, InputMode mode, bool caretAvailable)
     {

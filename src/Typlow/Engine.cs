@@ -164,7 +164,6 @@ internal sealed class FocusEngine : IDisposable
             foreach (nint old in paths.Keys.Where(w => !Native.IsWindow(w)).ToArray()) { paths.Remove(old); policy.Forget(old); }
         }
         if (!paths.TryGetValue(window, out string? path) || path.Length == 0 || changedWindow) paths[window] = path = Native.AppPath(window);
-        indicatorVisit.Enter(current, path);
         bool inspectAddress = settings.AddressEnglish && BrowserDetection.IsBrowser(path);
         bool inspectInput = settings.ShowIndicator && settings.Rules.Exists(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
         bool changedInput = false;
@@ -197,14 +196,16 @@ internal sealed class FocusEngine : IDisposable
                 {
                     // UIA focus can lag the foreground event. Defer decisions rather than misclassifying an address bar.
                     focusedElement = null; focusKey = ""; isInput = false; focusValid = false;
+                    indicatorVisit.Enter(window, path, "", false);
                     focusRefresh.Request(); return;
                 }
             }
-            catch (ElementNotAvailableException) { focusedElement = null; focusKey = ""; isInput = false; focusValid = false; focusRefresh.Request(); return; }
-            catch (System.Runtime.InteropServices.COMException) { focusedElement = null; focusKey = ""; isInput = false; focusValid = false; focusRefresh.Request(); return; }
+            catch (ElementNotAvailableException) { focusedElement = null; focusKey = ""; isInput = false; focusValid = false; indicatorVisit.Enter(window, path, "", false); focusRefresh.Request(); return; }
+            catch (System.Runtime.InteropServices.COMException) { focusedElement = null; focusKey = ""; isInput = false; focusValid = false; indicatorVisit.Enter(window, path, "", false); focusRefresh.Request(); return; }
             finally { focusRefresh.Complete(Environment.TickCount64); }
         }
         if (!focusValid) return;
+        indicatorVisit.Enter(window, path, focusKey, isInput);
         InputState state = ime.Read(window);
         var request = policy.Observe(new(window, path, address, state), settings);
         if (request != null)

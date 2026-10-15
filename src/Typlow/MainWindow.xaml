@@ -42,7 +42,7 @@
       </Grid>
       <Border Height="1" Background="#EFF0F5" Margin="0,16"/>
       <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-       <StackPanel><TextBlock Text="입력 언어 살짝 표시" FontSize="13" FontWeight="SemiBold"/><TextBlock Text="앱으로 돌아오거나 한·영을 바꾸면 입력 커서 옆에 보여줘요." Foreground="#7F879A" FontSize="12" Margin="0,6,0,0"/></StackPanel>
+       <StackPanel><TextBlock Text="입력 언어 살짝 표시" FontSize="13" FontWeight="SemiBold"/><TextBlock Text="입력란에 포커스가 들어오거나 한·영을 바꾸면 커서 옆에 보여줘요." Foreground="#7F879A" FontSize="12" Margin="0,6,0,0"/></StackPanel>
        <CheckBox Grid.Column="1" x:Name="IndicatorToggle" Style="{StaticResource Toggle}" Checked="OptionsChanged" Unchecked="OptionsChanged" AutomationProperties.Name="입력 언어 표시"/>
       </Grid>
       <Grid Margin="0,14,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -58,7 +58,7 @@
     </Border>
    </Grid>
    <Grid Grid.Row="3" Margin="30,17,30,20"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-    <TextBlock Text="Version 0.5" FontSize="12" Foreground="#9399AB" VerticalAlignment="Center"/>
+    <TextBlock Text="Version 0.6" FontSize="12" Foreground="#9399AB" VerticalAlignment="Center"/>
     <TextBlock Grid.Column="1" Text="Windows를 위한 입력 도우미" FontSize="12" Foreground="#858E9F"/>
    </Grid>
   </Grid>
